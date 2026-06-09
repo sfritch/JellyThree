@@ -4,6 +4,12 @@ import { GLTFLoader } from "jsm/loaders/GLTFLoader.js";
 import { HDRLoader } from "jsm/loaders/HDRLoader.js";
 
 let camera, scene, renderer, ctrls,mixer;
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+let hovered = null;
+let jellyRoot;
+let actions = [];
 
 const clock = new THREE.Clock();
 
@@ -13,16 +19,16 @@ const jellyParams = {
   transmission: 1,
   transparent: true,
   opacity: 1,
-  metalness: .75,
-  roughness: .5,
-  ior: 1.67,
-  thickness: .5,
-  specularIntensity: 1,
-  envMapIntensity: .5,
+  metalness: .05,
+  roughness: .25,
+  ior: 1.75,
+  thickness: 1.1,
+  specularIntensity: 2,
+  envMapIntensity: 1.8,
   attenuationDistance: 50,
   attenuationColor: new THREE.Color(0x88ccff),
   side: THREE.FrontSide,
-  exposure: 3
+  exposure: 1
 };
 
 const brainParams = {
@@ -33,7 +39,7 @@ const brainParams = {
   opacity: 1,
   transparent: true,
   emissive: 0x1a8dcb,
-  emissiveIntensity: 50.0,
+  emissiveIntensity: 2.0,
   envMapIntensity: 1,
   side: THREE.DoubleSide
 };
@@ -87,7 +93,7 @@ function init() {
   //scene.add(dirLight);
 
    const rim = new THREE.DirectionalLight(0xffffff, 1);
-   rim.position.set(0, 2, .1);
+   rim.position.set(10, 1, 100);
    scene.add(rim);
 
   //scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 0.8));
@@ -114,28 +120,28 @@ function init() {
   const pmrem = new THREE.PMREMGenerator(renderer);
   pmrem.compileEquirectangularShader();
 
-  new HDRLoader().load(
-  "Fresnel_sm.hdr",
-  (hdrTexture) => {
+  new HDRLoader().load("Fresnel_sm.hdr", (hdrTexture) => {
 
-    const envMap =
-      pmrem.fromEquirectangular(hdrTexture).texture;
+  const hdrEnv = pmrem.fromEquirectangular(hdrTexture).texture;
 
-    scene.environment = envMap;
+  // use HDR ONLY for subtle lighting
+  scene.environment = hdrEnv;
 
-    const whiteEnv = pmrem.fromScene(scene).texture;
+  // DO NOT use HDR as background
+  scene.background = new THREE.Color(0xeeeeee);
 
-    //scene.environment = whiteEnv;
-    scene.background = new THREE.Color(0x000000);
+  hdrTexture.dispose();
 
-    hdrTexture.dispose();
-    pmrem.dispose();
-
-    loadModel(jellyMaterial);
-  }
-);
+  loadModel(jellyMaterial);
+});
 
   window.addEventListener("resize", onResize);
+  window.addEventListener("mousemove", (event) => {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  });
+
+  window.addEventListener("click", onObjectClick);
 
   animate();
 }
@@ -143,25 +149,34 @@ function init() {
 // Load GLB Model
 function loadModel(material) {
   const loader = new GLTFLoader();
+  const modelURL = new URL("./assets/jellyfish.glb", import.meta.url);
 
-  loader.load("./jellyfish.glb", (gltf) => {
+  loader.load(modelURL.href, (gltf) => {
     const root = gltf.scene;
+    jellyRoot = root;
     scene.add(root);
 
     if (gltf.animations && gltf.animations.length > 0) {
 
   mixer = new THREE.AnimationMixer(root);
 
-  //console.log("Animations found:", gltf.animations);
+  actions = gltf.animations.map((clip) => {
 
-  gltf.animations.forEach((clip) => {
+  const action = mixer.clipAction(clip);
 
-    const action = mixer.clipAction(clip);
+  action.reset();
 
-      action.reset();
-      action.play();
+  action.setLoop(THREE.LoopOnce, 1);
+  action.clampWhenFinished = true;
 
-    });
+  action.paused = true;   // stays paused
+  action.play();          // required for mixer to evaluate
+  action.time = 0;        // force frame 0
+
+  action.enabled = true;
+
+  return action;
+});
 
     } else {
       console.warn("No animations found in GLB");
@@ -207,6 +222,7 @@ function loadModel(material) {
 
 // LOOP
 function animate() {
+
   const delta = clock.getDelta();
 
   requestAnimationFrame(animate);
@@ -214,7 +230,91 @@ function animate() {
   if (mixer) mixer.update(delta);
   ctrls.update();
 
+  if (jellyRoot) {
+
+    raycaster.setFromCamera(mouse, camera);
+
+    const hits = raycaster.intersectObject(jellyRoot, true);
+
+    if (hits.length > 0) {
+
+      if (hovered !== jellyRoot) {
+        hovered = jellyRoot;
+
+        onHoverEnter();
+      }
+
+    } else {
+
+      if (hovered) {
+        hovered = null;
+
+        onHoverLeave();
+      }
+    }
+  }
+
   renderer.render(scene, camera);
+}
+
+function onHoverEnter() {
+  // jellyRoot.traverse((child) => {
+
+  //   if (!child.isMesh) return;
+
+  //   if (child.material.emissive) {
+  //     child.material.emissive.set(0x3399ff);
+  //     child.material.emissiveIntensity = 1;
+  //   }
+
+  //   child.material.envMapIntensity = 2;
+  // });
+}
+
+function onHoverLeave() {
+  
+  // jellyRoot.traverse((child) => {
+
+  //   if (!child.isMesh) return;
+
+  //   if (child.material.emissive) {
+  //     child.material.emissive.set(0x000000);
+  //     child.material.emissiveIntensity = 0;
+  //   }
+
+  //   child.material.envMapIntensity = 1;
+  // });
+}
+
+function onObjectClick(event) {
+// convert mouse to normalized device coords (-1 to +1)
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+
+  const hits = raycaster.intersectObject(scene, true);
+
+  if (hits.length === 0) return; // clicked empty space
+
+  const hit = hits[0].object;
+  const name = hit.name.toLowerCase();
+
+ 
+
+  triggerAnimation();
+}
+
+function triggerAnimation() {
+
+  if (!actions) return;
+
+  actions.forEach((action) => {
+
+    action.reset();
+    action.paused = false;
+    action.play();
+  });
 }
 
 // RESIZE
