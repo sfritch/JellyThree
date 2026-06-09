@@ -144,7 +144,7 @@ function init() {
 function loadModel(material) {
   const loader = new GLTFLoader();
 
-  loader.load("jellyfish.glb", (gltf) => {
+  loader.load("/jellyfish.glb?url", (gltf) => {
     const root = gltf.scene;
     scene.add(root);
 
